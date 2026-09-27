@@ -12,6 +12,7 @@ const routes = [
     { path: 'venues', component: () => import('./views/Venues.vue') },
     { path: 'organizers', component: () => import('./views/Organizers.vue') },
     { path: 'incidents', component: () => import('./views/IncidentList.vue') },
+    { path: 'noise-reviews', component: () => import('./views/NoiseReviews.vue') },
     { path: 'dashboard', component: () => import('./views/Dashboard.vue') },
   ] },
 ];

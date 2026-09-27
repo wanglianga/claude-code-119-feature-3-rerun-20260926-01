@@ -14,6 +14,23 @@
     <div v-if="s.venue?.blacklisted" class="notice danger">
       ⛔ 该场地已列入黑名单：{{ s.venue.blacklistReason }}
     </div>
+    <template v-else-if="s.venueNoiseRestricted || s.noiseTestRequired">
+      <div class="notice danger">
+        🔇 该场地为<b>噪声限制点位</b>（上一次噪声投诉复盘关闭后带出）：
+        <ul style="margin:6px 0 0 18px;padding:0">
+          <li v-if="s.inheritedLatestShowTime">本场地最晚放映开始时间限定 <b>{{ s.inheritedLatestShowTime }}</b>（本场申请 {{ s.showTime }}
+            <span :style="s.showTime > s.inheritedLatestShowTime ? 'color:#d9534f;font-weight:700' : ''">
+              {{ s.showTime > s.inheritedLatestShowTime ? '晚于限制，审批将被拦截' : '符合限制' }}</span>）</li>
+          <li v-if="s.noiseTestRequired">下一次申请须<b>提前完成降噪测试并达标（≤60dB）</b>后方可审批通过
+            <span v-if="s.noiseTestDone" class="tag" :class="s.noiseTestDb <= 60 ? 'green' : 'red'">
+              已测 {{ s.noiseTestDb }}dB {{ s.noiseTestDb <= 60 ? '达标' : '超标' }}
+            </span>
+            <span v-else class="tag orange">尚未测试</span>
+          </li>
+        </ul>
+        <div v-if="s.venue?.noiseRestrictionNote" class="muted" style="margin-top:4px">{{ s.venue.noiseRestrictionNote }}</div>
+      </div>
+    </template>
     <div v-else-if="s.venueRiskLevel !== '正常'" class="notice">
       ⚠ 点位风险等级：<b>{{ s.venueRiskLevel }}</b>
       （历史噪声 {{ s.venue.noiseCount }} 次 / 设备损坏 {{ s.venue.damageCount }} 次 / 投诉 {{ s.venue.complaintCount }} 次，
@@ -252,6 +269,130 @@
       </div>
     </div>
 
+    <!-- 噪声投诉复盘 -->
+    <div v-show="tab === 'noise'">
+      <div v-if="s.noiseTestRequired" class="card">
+        <h3>限制场地 · 放映前提前降噪测试（审批前置条件）</h3>
+        <div class="notice">
+          该点位上一次噪声投诉复盘已关闭，下一次申请须<b>提前完成降噪测试</b>，实测 ≤60dB 后审核员才能审批通过。
+        </div>
+        <template v-if="s.noiseTestDone">
+          <div class="notice success">
+            已于 {{ fmt(s.noiseTestAt) }} 完成降噪测试，实测 <b>{{ s.noiseTestDb }} dB</b>，
+            {{ s.noiseTestDb <= 60 ? '达标，可提交审批' : '仍超标，须继续整改复测' }}
+            <span v-if="s.noiseTestNote">（{{ s.noiseTestNote }}）</span>
+          </div>
+        </template>
+        <div v-if="isAny('site_manager','warehouse','security','street')" class="row" style="margin-top:10px">
+          <input v-model.number="noiseTest.noiseDb" type="number" placeholder="实测分贝，如 56" style="width:150px" />
+          <input v-model="noiseTest.note" placeholder="测试位置/整改措施（可选）" style="flex:1;min-width:200px" />
+          <button class="primary" @click="recordNoiseTest">登记提前降噪测试</button>
+        </div>
+      </div>
+
+      <div v-if="isAny('site_manager','security','street') && ['screening','completed'].includes(s.status)" class="card">
+        <h3>居民投诉扰民 · 现场复盘登记</h3>
+        <div class="notice">
+          现场负责人记录投诉楼栋、分贝读数、调低音量时间和安保沟通结果；
+          若活动提前结束，平台按实际放映时长重新计算<b>街道补贴</b>与<b>商户协办费用</b>，并形成该点位后续最晚放映时间。
+        </div>
+        <div class="grid2">
+          <div class="form-row"><label class="req">投诉楼栋</label>
+            <input v-model="nr.complaintBuildings" placeholder="如 3栋2单元、5栋" />
+          </div>
+          <div class="form-row"><label class="req">分贝读数</label>
+            <input v-model.number="nr.noiseDb" type="number" placeholder="现场实测，如 67" />
+          </div>
+          <div class="form-row"><label class="req">调低音量时间</label>
+            <input v-model="nr.volumeLoweredAt" type="time" />
+          </div>
+          <div class="form-row"><label>调低后复测</label>
+            <input v-model.number="nr.noiseDbAfter" type="number" placeholder="可选，如 55" />
+          </div>
+        </div>
+        <div class="form-row" style="grid-template-columns:110px 1fr">
+          <label class="req">安保沟通结果</label>
+          <textarea v-model="nr.securityResult" placeholder="上门解释经过、居民诉求、音箱角度/功率调整等现场措施" />
+        </div>
+        <div class="form-row"><label>关联噪声工单</label>
+          <select v-model="nr.incidentId">
+            <option value="">不关联（直接登记）</option>
+            <option v-for="inc in noiseIncidents" :key="inc.id" :value="inc.id">
+              {{ inc.id.slice(0,8) }} · {{ inc.status === 'resolved' ? '已办结' : '处理中' }} · {{ inc.description.slice(0, 20) }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-row"><label>活动提前结束</label>
+          <label class="muted"><input type="checkbox" style="width:auto" v-model="nr.endedEarly" />
+            因本次投诉活动提前结束（勾选后填写实际结束时间并重算费用）</label>
+        </div>
+        <template v-if="nr.endedEarly">
+          <div class="grid2">
+            <div class="form-row"><label class="req">实际结束时间</label>
+              <input v-model="nr.earlyEndAt" type="time" />
+            </div>
+            <div class="form-row"><label>建议最晚放映</label>
+              <input v-model="nr.proposedLatestShowTime" type="time" placeholder="默认取实际结束时间" />
+            </div>
+            <div class="form-row"><label>计划补贴(元)</label>
+              <input v-model.number="nr.planSubsidyYuan" type="number" />
+            </div>
+            <div class="form-row"><label>计划商户协办费(元)</label>
+              <input v-model.number="nr.planMerchantCostYuan" type="number" />
+            </div>
+          </div>
+          <div class="notice">
+            重算口径：按计划 120 分钟标准时长折算实际放映占比（保底 25%）；
+            计划补贴 ¥{{ nr.planSubsidyYuan }}、商户协办费 ¥{{ nr.planMerchantCostYuan }}，
+            实际结束 {{ nr.earlyEndAt || '—' }} 后平台自动核定，街道关闭复盘时对点位下最晚放映时间。
+          </div>
+        </template>
+        <div class="row" style="padding-left:120px">
+          <button class="primary" @click="createNoiseReview">提交噪声投诉复盘（提交后待街道关闭）</button>
+        </div>
+      </div>
+
+      <div v-for="r in s.noiseReviews" :key="r.id" class="card">
+        <div class="row" style="justify-content:space-between">
+          <div>
+            <span class="tag" :class="r.status === 'closed' ? 'green' : 'red'">
+              {{ r.status === 'closed' ? '已关闭' : '待街道关闭' }}
+            </span>
+            <b style="margin-left:8px">投诉楼栋：{{ r.complaintBuildings }}</b>
+            <span class="pill">{{ r.noiseDb }} dB</span>
+            <span v-if="r.endedEarly" class="pill" style="background:#fdf0e6;color:#b35c00">
+              提前结束 {{ hhmm(r.earlyEndAt) }}
+            </span>
+          </div>
+          <button v-if="is('street') && r.status !== 'closed'" @click="$router.push(`/noise-reviews?focus=${r.id}`)">
+            街道确认关闭 →
+          </button>
+        </div>
+        <div class="grid3" style="margin-top:8px">
+          <Info label="调低音量时间" :value="fmt(r.volumeLoweredAt)" />
+          <Info label="调低后复测" :value="r.noiseDbAfter != null ? `${r.noiseDbAfter} dB` : '—'" />
+          <Info label="登记人" :value="r.recordedBy?.name || '—'" />
+        </div>
+        <div style="margin-top:6px"><span class="muted">安保沟通：</span>{{ r.securityResult }}</div>
+        <div v-if="r.recalcNote" class="notice" style="margin-top:8px">
+          {{ r.recalcNote }}
+          <div style="margin-top:4px">核定补贴 <b>¥{{ fen(r.finalSubsidyCents) }}</b> ｜
+            核定商户协办费 <b>¥{{ fen(r.finalMerchantCostCents) }}</b></div>
+        </div>
+        <div v-if="r.status === 'closed'" class="notice success" style="margin-top:8px">
+          街道已于 {{ fmt(r.closedAt) }} 关闭：居民沟通 {{ r.residentConfirmed ? '✓' : '✗' }}、
+          音量调整 {{ r.volumeConfirmed ? '✓' : '✗' }}、
+          提前结束时间 {{ r.earlyEndConfirmed ? '✓' : '—'}}；
+          限制条件已自动带到下一次同场地审批。
+          <span v-if="r.streetNote">意见：{{ r.streetNote }}</span>
+        </div>
+      </div>
+      <div v-if="!s.noiseReviews?.length" class="card">
+        <span class="muted">本场暂无噪声投诉复盘记录。放映中居民投诉扰民时，由现场负责人在本页登记。</span>
+      </div>
+    </div>
+
     <!-- 核销 -->
     <div v-show="tab === 'settlement'">
       <div class="card">
@@ -259,8 +400,14 @@
         <div class="grid4">
           <div class="kpi"><div class="num">¥{{ fen(s.damageCompensation) }}</div><div class="label">设备损坏赔付</div></div>
           <div class="kpi"><div class="num">¥{{ fen(s.depositDeducted) }}</div><div class="label">押金扣减</div></div>
-          <div class="kpi"><div class="num">¥{{ fen(s.subsidyAmount) }}</div><div class="label">补贴发放</div></div>
+          <div class="kpi"><div class="num">¥{{ fen(s.subsidyAmount) }}</div><div class="label">补贴发放{{ Number(s.planSubsidyCents) ? `（计划¥${fen(s.planSubsidyCents)}）` : '' }}</div></div>
+          <div class="kpi"><div class="num">¥{{ fen(s.merchantCostCents) }}</div><div class="label">商户协办费{{ Number(s.planMerchantCostCents) ? `（计划¥${fen(s.planMerchantCostCents)}）` : '' }}</div></div>
+          <div class="kpi"><div class="num">{{ s.endedEarlyAt ? fmt(s.endedEarlyAt).slice(5) : '正常' }}</div><div class="label">提前结束时间</div></div>
           <div class="kpi"><div class="num">{{ s.copyrightWrittenOff ? '已核销' : '未核销' }}</div><div class="label">版权核销</div></div>
+        </div>
+        <div v-if="s.endedEarlyAt" class="notice danger" style="margin-top:10px">
+          本场因噪声投诉于 {{ fmt(s.endedEarlyAt) }} 提前结束（{{ s.endedEarlyReason }}），
+          补贴与商户协办费用已按实际放映时长重新核算，明细见下方流水与「噪声投诉复盘」页签。
         </div>
         <div v-if="isAny('reviewer','finance','street')" class="row" style="margin-top:14px">
           <button class="primary" :disabled="s.copyrightWrittenOff" @click="writeoff">版权核销</button>
@@ -335,6 +482,7 @@ const tabs = computed(() => [
   { key: 'equipment', label: `设备出库/归还${s.value?.equipmentAssignments?.length ? `（${s.value.equipmentAssignments.length}）` : ''}` },
   { key: 'site', label: '现场巡检/志愿者' },
   { key: 'incidents', label: `异常协同${s.value?.incidents?.length ? `（${s.value.incidents.filter((i:any)=>i.status!=='resolved').length}）` : ''}` },
+  { key: 'noise', label: `噪声投诉复盘${s.value?.noiseReviews?.length ? `（${s.value.noiseReviews.length}）` : ''}` },
   { key: 'settlement', label: '归还核销/补贴' },
   { key: 'timeline', label: '街道时间线' },
 ]);
@@ -349,9 +497,19 @@ const newInc = reactive({ type: 'noise_complaint', description: '', noiseDb: 65 
 const settle = reactive({ type: 'deposit_refund', yuan: 2000, note: '' });
 const finalRemark = ref('');
 const returnDraft = reactive<Record<string, any>>({});
+const nr = reactive({
+  incidentId: '', complaintBuildings: '', noiseDb: 65, volumeLoweredAt: '20:30',
+  noiseDbAfter: 55, securityResult: '', endedEarly: false, earlyEndAt: '21:10',
+  proposedLatestShowTime: '', planSubsidyYuan: 800, planMerchantCostYuan: 300,
+});
+const noiseTest = reactive({ noiseDb: 56, note: '' });
+
+const noiseIncidents = computed(() =>
+  (s.value?.incidents || []).filter((i: any) => i.type === 'noise_complaint'));
 
 const fen = fenToYuan;
 function fmt(d?: string) { return d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—'; }
+function hhmm(d?: string) { return d ? new Date(d).toTimeString().slice(0, 5) : '—'; }
 
 const sortedTimeline = computed(() =>
   [...(s.value?.timeline || [])].sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt)));
@@ -466,6 +624,30 @@ async function addSettlement() {
 }
 async function complete() {
   await api.post(`/screenings/${s.value.id}/settlements/complete`, { finalRemark: finalRemark.value || undefined });
+  await load();
+}
+async function createNoiseReview() {
+  await api.post(`/screenings/${s.value.id}/noise-reviews`, {
+    incidentId: nr.incidentId || undefined,
+    complaintBuildings: nr.complaintBuildings,
+    noiseDb: nr.noiseDb,
+    volumeLoweredAt: nr.volumeLoweredAt,
+    noiseDbAfter: nr.noiseDbAfter || undefined,
+    securityResult: nr.securityResult,
+    endedEarly: nr.endedEarly,
+    earlyEndAt: nr.endedEarly ? nr.earlyEndAt : undefined,
+    proposedLatestShowTime: nr.endedEarly && nr.proposedLatestShowTime ? nr.proposedLatestShowTime : undefined,
+    planSubsidyCents: nr.endedEarly ? Math.round(Number(nr.planSubsidyYuan || 0) * 100) : undefined,
+    planMerchantCostCents: nr.endedEarly ? Math.round(Number(nr.planMerchantCostYuan || 0) * 100) : undefined,
+  });
+  nr.complaintBuildings = ''; nr.securityResult = ''; nr.incidentId = '';
+  await load();
+}
+async function recordNoiseTest() {
+  await api.post(`/screenings/${s.value.id}/noise-test`, {
+    noiseDb: noiseTest.noiseDb, note: noiseTest.note || undefined,
+  });
+  noiseTest.note = '';
   await load();
 }
 

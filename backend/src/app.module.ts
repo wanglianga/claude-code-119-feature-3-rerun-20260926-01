@@ -12,6 +12,7 @@ import { Incident, IncidentReply } from './entities/incident.entity';
 import { TimelineEvent } from './entities/timeline-event.entity';
 import { VolunteerCheckin } from './entities/volunteer-checkin.entity';
 import { Settlement } from './entities/settlement.entity';
+import { NoiseReview } from './entities/noise-review.entity';
 import { AuthModule } from './modules/auth/auth.module';
 import { VenuesModule } from './modules/venues/venues.module';
 import { OrganizersModule } from './modules/organizers/organizers.module';
@@ -21,6 +22,7 @@ import { InspectionsModule } from './modules/inspections/inspections.module';
 import { IncidentsModule } from './modules/incidents/incidents.module';
 import { VolunteersModule } from './modules/volunteers/volunteers.module';
 import { SettlementsModule } from './modules/settlements/settlements.module';
+import { NoiseReviewsModule } from './modules/noise-reviews/noise-reviews.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SeedService } from './seed/seed.service';
 import { HealthController } from './health.controller';
@@ -28,6 +30,7 @@ import { HealthController } from './health.controller';
 const entities = [
   User, Venue, Organizer, Screening, Equipment, EquipmentAssignment,
   Inspection, Incident, IncidentReply, TimelineEvent, VolunteerCheckin, Settlement,
+  NoiseReview,
 ];
 
 @Module({
@@ -56,6 +59,7 @@ const entities = [
     IncidentsModule,
     VolunteersModule,
     SettlementsModule,
+    NoiseReviewsModule,
     DashboardModule,
   ],
   providers: [SeedService],

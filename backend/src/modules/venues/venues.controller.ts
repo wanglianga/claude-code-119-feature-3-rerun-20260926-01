@@ -25,4 +25,11 @@ export class VenuesController {
   toggle(@Param('id') id: string, @Body() body: { blacklisted: boolean; reason?: string }) {
     return this.service.toggleBlacklist(id, body.blacklisted, body.reason || '');
   }
+
+  /** 新一轮场次降噪测试达标、复盘通过后，街道解除噪声限制（黑名单不受影响） */
+  @Post(':id/clear-noise-restriction')
+  @Roles('street')
+  clearNoiseRestriction(@Param('id') id: string) {
+    return this.service.clearNoiseRestriction(id);
+  }
 }

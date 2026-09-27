@@ -8,7 +8,7 @@
       <table class="list">
         <thead>
           <tr><th>场地</th><th>类型</th><th>地址</th><th>容量</th>
-            <th>噪声次数</th><th>设备损坏</th><th>投诉</th><th>风险分</th><th>最近活动</th><th>状态</th><th>操作</th></tr>
+            <th>噪声次数</th><th>设备损坏</th><th>投诉</th><th>风险分</th><th>噪声限制</th><th>最近活动</th><th>状态</th><th>操作</th></tr>
         </thead>
         <tbody>
           <tr v-for="v in list" :key="v.id">
@@ -20,6 +20,16 @@
             <td>
               <span class="tag" :class="risk(v).cls">{{ risk(v).score }} · {{ risk(v).label }}</span>
             </td>
+            <td>
+              <template v-if="v.noiseRestricted">
+                <span class="tag orange">限制中</span>
+                <div class="muted" style="margin-top:3px">
+                  最晚放映 {{ v.latestShowTime || '—' }}<br>
+                  {{ v.noiseTestRequired ? '须提前降噪测试' : '' }}
+                </div>
+              </template>
+              <span v-else class="muted">—</span>
+            </td>
             <td class="muted">{{ v.lastScreeningAt ? fmt(v.lastScreeningAt) : '—' }}</td>
             <td>
               <span v-if="v.blacklisted" class="tag red">黑名单</span>
@@ -28,7 +38,11 @@
             <td>
               <button v-if="!v.blacklisted" class="danger" @click="toggle(v, true)">列入黑名单</button>
               <button v-else class="success" @click="toggle(v, false)">解除黑名单</button>
+              <button v-if="v.noiseRestricted" class="primary" style="margin-top:6px" @click="clearNoise(v)">
+                解除噪声限制
+              </button>
               <div v-if="v.blacklisted" class="muted" style="margin-top:4px;max-width:220px">{{ v.blacklistReason }}</div>
+              <div v-if="v.noiseRestricted" class="muted" style="margin-top:4px;max-width:220px">{{ v.noiseRestrictionNote }}</div>
             </td>
           </tr>
         </tbody>
@@ -62,6 +76,11 @@ async function toggle(v: any, blacklisted: boolean) {
     if (!reason) return;
   }
   await api.post(`/venues/${v.id}/blacklist`, { blacklisted, reason });
+  await load();
+}
+async function clearNoise(v: any) {
+  if (!window.confirm(`确认解除「${v.name}」的噪声限制（最晚放映时间/降噪测试要求将一并取消）？`)) return;
+  await api.post(`/venues/${v.id}/clear-noise-restriction`, {});
   await load();
 }
 onMounted(load);

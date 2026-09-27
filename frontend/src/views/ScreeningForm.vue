@@ -19,17 +19,32 @@
           </select>
         </div>
         <div class="form-row"><label class="req">放映场地</label>
-          <select v-model="form.venueId">
+          <select v-model="form.venueId" @change="onVenueChange">
             <option value="">请选择</option>
             <option v-for="v in venues" :key="v.id" :value="v.id" :disabled="v.blacklisted">
-              {{ v.name }}{{ v.blacklisted ? '（黑名单·禁选）' : '' }}
+              {{ v.name }}{{ v.blacklisted ? '（黑名单·禁选）' : v.noiseRestricted ? '（噪声限制·需降噪测试）' : '' }}
             </option>
           </select>
         </div>
         <div class="form-row"><label class="req">具体位置</label><input v-model="form.location" placeholder="广场北侧/外摆B区" /></div>
         <div class="form-row"><label class="req">放映日期</label><input v-model="form.showDate" type="date" /></div>
-        <div class="form-row"><label class="req">放映时间</label><input v-model="form.showTime" type="time" /></div>
+        <div class="form-row"><label class="req">放映时间</label>
+          <input v-model="form.showTime" type="time"
+            :style="selectedVenue?.latestShowTime && form.showTime > selectedVenue.latestShowTime ? 'border-color:#d9534f' : ''" />
+        </div>
         <div class="form-row"><label class="req">预计观众</label><input v-model.number="form.expectedAudience" type="number" min="1" /></div>
+      </div>
+
+      <div v-if="selectedVenue?.noiseRestricted" class="notice danger" style="margin:0 0 4px">
+        🔇 该场地为<b>噪声限制</b>点位，上一次噪声投诉复盘关闭后形成的限制条件将自动带入本次申请：
+        <ul style="margin:6px 0 0 18px;padding:0">
+          <li v-if="selectedVenue.latestShowTime">最晚放映开始时间 <b>{{ selectedVenue.latestShowTime }}</b>
+            <span v-if="form.showTime > selectedVenue.latestShowTime" style="color:#d9534f;font-weight:700">
+              —— 当前 {{ form.showTime }} 晚于限制，审批将被拦截，请改到 {{ selectedVenue.latestShowTime }} 之前</span>
+          </li>
+          <li>场次创建后、审核通过前，须由现场/仓库/安保<b>提前完成降噪测试并达标（≤60dB）</b>（场次详情「噪声投诉复盘」页签登记）</li>
+        </ul>
+        <div v-if="selectedVenue.noiseRestrictionNote" class="muted" style="margin-top:4px">{{ selectedVenue.noiseRestrictionNote }}</div>
       </div>
     </div>
 
@@ -73,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api';
 
@@ -90,6 +105,16 @@ const form = ref({
   powerCondition: '', screenSize: '6m x 3.4m', speakerCount: 2, securityStaff: 4,
   rainPlan: '', siteManagerName: '周强', securityLeadName: '孙队',
 });
+
+const selectedVenue = computed(() => venues.value.find((v) => v.id === form.value.venueId));
+
+/** 选择被限制场地时自动带出最晚放映时间：晚于限制则钳制到限制值 */
+function onVenueChange() {
+  const v = selectedVenue.value;
+  if (v?.noiseRestricted && v.latestShowTime && form.value.showTime > v.latestShowTime) {
+    form.value.showTime = v.latestShowTime;
+  }
+}
 
 onMounted(async () => {
   const [v, o] = await Promise.all([api.get('/venues'), api.get('/organizers')]);

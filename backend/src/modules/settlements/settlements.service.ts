@@ -13,6 +13,8 @@ const TYPE_NAME: Record<string, string> = {
   deposit_deduct: '押金扣减',
   deposit_refund: '押金退还',
   subsidy: '街道补贴发放',
+  subsidy_recalc: '提前结束·补贴重新核算',
+  merchant_cost_recalc: '提前结束·商户协办费重新核算',
   complaint_compensation: '投诉赔付',
   copyright_writeoff: '版权核销',
 };

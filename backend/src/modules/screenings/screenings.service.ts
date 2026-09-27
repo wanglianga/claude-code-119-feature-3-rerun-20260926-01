@@ -58,7 +58,7 @@ export class ScreeningsService {
         'applicant', 'venue', 'organizer',
         'equipmentAssignments', 'equipmentAssignments.equipment',
         'inspections', 'incidents', 'timeline',
-        'volunteerCheckins', 'settlements',
+        'volunteerCheckins', 'settlements', 'noiseReviews',
       ],
     });
     if (!s) throw new NotFoundException('场次不存在');
@@ -66,6 +66,8 @@ export class ScreeningsService {
     // 风险等级：连续噪声/设备损坏点位影响下一轮审批
     const riskScore = s.venue.noiseCount * 2 + s.venue.damageCount * 3 + s.venue.complaintCount;
     (s as any).venueRiskLevel = riskScore >= 8 ? '高风险' : riskScore >= 3 ? '关注' : '正常';
+    // 场地噪声限制：下一次同场地审批自动带出本次限制条件
+    (s as any).venueNoiseRestricted = !!s.venue.noiseRestricted;
     return s;
   }
 
@@ -78,6 +80,11 @@ export class ScreeningsService {
     const organizer = await this.organizerRepo.findOne({ where: { id: dto.organizerId } });
     if (!organizer) throw new BadRequestException('主办方不存在');
 
+    // 被噪声限制的场地不拦截申请，但自动带出上一次复盘的限制条件：
+    // 最晚放映时间 + 下一次申请前须提前降噪测试
+    const inheritedLatestShowTime = venue.noiseRestricted ? venue.latestShowTime : null;
+    const noiseTestRequired = venue.noiseRestricted && venue.noiseTestRequired;
+
     const seq = Math.floor(1000 + Math.random() * 9000);
     const code = `OC-${dto.showDate.replace(/-/g, '')}-${seq}`;
     const screening = this.repo.create({
@@ -85,10 +92,16 @@ export class ScreeningsService {
       code,
       applicantId: user.sub,
       status: 'draft',
+      inheritedLatestShowTime,
+      noiseTestRequired,
     });
     const saved = await this.repo.save(screening);
     await this.log(saved.id, 'apply', '提交放映申请',
-      `${dto.showDate} ${dto.showTime} @ ${venue.name}，影片《${dto.filmName}》，预计观众 ${dto.expectedAudience} 人`,
+      `${dto.showDate} ${dto.showTime} @ ${venue.name}，影片《${dto.filmName}》，预计观众 ${dto.expectedAudience} 人`
+      + (venue.noiseRestricted
+        ? `｜该场地为噪声限制点位：最晚放映开始时间 ${venue.latestShowTime || '—'}，`
+          + `审批前须提前完成降噪测试${venue.noiseRestrictionNote ? `（${venue.noiseRestrictionNote}）` : ''}`
+        : ''),
       user, 'applicant');
     return saved;
   }
@@ -107,6 +120,21 @@ export class ScreeningsService {
     if (!s) throw new NotFoundException('场次不存在');
     if (s.status !== 'pending_review') throw new BadRequestException('仅待审核场次可审批');
     if (dto.approved) {
+      // 噪声限制点位：审批自动带出上一次复盘限制条件，未完成提前降噪测试不得通过
+      if (s.noiseTestRequired && !s.noiseTestDone) {
+        throw new BadRequestException(
+          `该场地为噪声限制点位，须在放映前提前完成降噪测试并达标（≤60dB）后方可审批通过；`
+          + `限制说明：${s.venue.noiseRestrictionNote || '见上一次噪声投诉复盘'}`,
+        );
+      }
+      if (s.noiseTestRequired && s.noiseTestDone && (s.noiseTestDb ?? 999) > 60) {
+        throw new BadRequestException(`提前降噪测试实测 ${s.noiseTestDb}dB 仍超过夜间阈值 60dB，整改复测达标后再审`);
+      }
+      if (s.inheritedLatestShowTime && s.showTime > s.inheritedLatestShowTime) {
+        throw new BadRequestException(
+          `申请放映开始时间 ${s.showTime} 晚于该点位限制的最晚放映开始时间 ${s.inheritedLatestShowTime}，请调整时间后再审`,
+        );
+      }
       s.status = 'review_approved';
       s.copyrightConfirmed = true;
       s.publicEventFiled = true;

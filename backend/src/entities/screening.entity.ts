@@ -11,6 +11,7 @@ import { Incident } from './incident.entity';
 import { TimelineEvent } from './timeline-event.entity';
 import { VolunteerCheckin } from './volunteer-checkin.entity';
 import { Settlement } from './settlement.entity';
+import { NoiseReview } from './noise-review.entity';
 
 /**
  * 场次生命周期：
@@ -153,6 +154,47 @@ export class Screening {
   @Column({ type: 'bigint', default: 0 })
   subsidyAmount: string;
 
+  /** 原计划/核定补贴（分），提前结束重算前的口径，留痕便于复盘 */
+  @Column({ type: 'bigint', default: 0 })
+  planSubsidyCents: string;
+
+  /** 商户协办费用（分）：商圈/物业协办场地、保洁、用电等费用，提前结束按比例重新核算 */
+  @Column({ type: 'bigint', default: 0 })
+  merchantCostCents: string;
+
+  /** 原计划商户协办费用（分） */
+  @Column({ type: 'bigint', default: 0 })
+  planMerchantCostCents: string;
+
+  /** 因噪声投诉提前结束放映的实际结束时间；为空表示正常放映 */
+  @Column({ type: 'timestamptz', nullable: true })
+  endedEarlyAt: Date;
+
+  /** 提前结束原因（与噪声复盘联动） */
+  @Column({ type: 'text', nullable: true })
+  endedEarlyReason: string;
+
+  // ---------- 上一次同场地噪声复盘带出的审批限制 ----------
+  /** 自动带出的该点位最晚放映（开始）时间 HH:mm */
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  inheritedLatestShowTime: string;
+
+  /** 被限制场地：下一次申请前必须提前做降噪测试 */
+  @Column({ type: 'boolean', default: false })
+  noiseTestRequired: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  noiseTestDone: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  noiseTestAt: Date;
+
+  @Column({ type: 'int', nullable: true })
+  noiseTestDb: number;
+
+  @Column({ type: 'text', nullable: true })
+  noiseTestNote: string;
+
   /** 版权核销状态 */
   @Column({ type: 'boolean', default: false })
   copyrightWrittenOff: boolean;
@@ -181,6 +223,9 @@ export class Screening {
 
   @OneToMany(() => Settlement, (s) => s.screening)
   settlements: Settlement[];
+
+  @OneToMany(() => NoiseReview, (n) => n.screening)
+  noiseReviews: NoiseReview[];
 
   @CreateDateColumn()
   createdAt: Date;

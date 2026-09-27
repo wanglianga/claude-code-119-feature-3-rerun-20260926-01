@@ -43,6 +43,26 @@ export class Venue {
   @Column({ type: 'int', default: 0 })
   complaintCount: number;
 
+  // ---------- 噪声投诉复盘形成的点位限制（街道关闭复盘时带出） ----------
+  /** 是否因噪声投诉复盘被限制（区别于黑名单：限制场地整改后仍可申请） */
+  @Column({ type: 'boolean', default: false })
+  noiseRestricted: boolean;
+
+  /** 限制条件：该点位最晚放映结束时间 HH:mm，来源于上次提前结束的实际结束时间 */
+  @Column({ type: 'varchar', length: 5, nullable: true })
+  latestShowTime: string;
+
+  /** 下一次同场地申请前是否必须提前做降噪测试 */
+  @Column({ type: 'boolean', default: false })
+  noiseTestRequired: boolean;
+
+  /** 限制说明（来源场次/投诉楼栋/处置经过） */
+  @Column({ type: 'text', nullable: true })
+  noiseRestrictionNote: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  restrictedAt: Date;
+
   /** 最近一次活动时间，便于街道复盘 */
   @Column({ type: 'timestamptz', nullable: true })
   lastScreeningAt: Date;

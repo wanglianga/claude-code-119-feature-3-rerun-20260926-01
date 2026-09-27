@@ -36,7 +36,7 @@ R=$(req POST "$TOK_applicant" /screenings -d "$BODY")
 echo "$R" | grep -q '黑名单' && ok "黑名单场地申请被拦截" || bad "黑名单拦截: $R"
 
 echo "== 3. 申请方新建申请并提交 → 审核员审批 =="
-VENUE_OK=$(req GET "$TOK_street" /venues | python3 -c 'import sys,json;print(next(v["id"] for v in json.load(sys.stdin) if not v["blacklisted"]))')
+VENUE_OK=$(req GET "$TOK_street" /venues | python3 -c 'import sys,json;print(next(v["id"] for v in json.load(sys.stdin) if not v["blacklisted"] and not v["noiseRestricted"]))')
 BODY="{\"title\":\"端到端验证专场\",\"organizerId\":\"$ORG\",\"venueId\":\"$VENUE_OK\",\"showDate\":\"2026-10-05\",\"showTime\":\"19:30\",\"location\":\"广场北侧\",\"expectedAudience\":220,\"filmName\":\"我和我的祖国\",\"copyrightProof\":\"ZS-E2E-0001\",\"copyrightOwner\":\"中影\",\"powerCondition\":\"市政配电箱220V/16A 40米\",\"screenSize\":\"6m x 3.4m\",\"speakerCount\":2,\"securityStaff\":4,\"rainPlan\":\"防雨罩+转多功能厅\",\"siteManagerName\":\"周强\",\"securityLeadName\":\"孙队\"}"
 SID=$(req POST "$TOK_applicant" /screenings -d "$BODY" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 [ -n "$SID" ] && ok "申请创建 $SID" || bad "申请创建"
@@ -104,6 +104,53 @@ NOISE_AFTER=$(req GET "$TOK_street" /venues | python3 -c "import sys,json;print(
 CREDIT_AFTER=$(req GET "$TOK_street" /organizers | python3 -c "import sys,json;print(next(o['creditScore'] for o in json.load(sys.stdin) if o['id']=='$ORG_ID'))")
 [ "$NOISE_AFTER" = $((NOISE_BEFORE+1)) ] && ok "点位噪声计数 $NOISE_BEFORE→$NOISE_AFTER" || bad "噪声计数 $NOISE_BEFORE→$NOISE_AFTER"
 [ "$CREDIT_AFTER" = $((CREDIT_BEFORE-8)) ] && ok "主办方信用 $CREDIT_BEFORE→$CREDIT_AFTER (-8)" || bad "信用 $CREDIT_BEFORE→$CREDIT_AFTER"
+
+echo "== 8b. 现场负责人登记噪声投诉复盘（楼栋/分贝/调低音量时间/安保结果），活动提前结束→费用重算 =="
+R=$(req POST "$TOK_site" "/screenings/$SID/noise-reviews" -d "{\"incidentId\":\"$INC\",\"complaintBuildings\":\"3栋2单元、5栋\",\"noiseDb\":67,\"volumeLoweredAt\":\"20:02\",\"noiseDbAfter\":55,\"securityResult\":\"安保孙队上门向3栋2单元601、5栋302住户解释，调低主音箱功率2档、音箱角度内收，居民仍坚持要求收场\",\"endedEarly\":true,\"earlyEndAt\":\"20:15\",\"planSubsidyCents\":80000,\"planMerchantCostCents\":30000}")
+NR=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+[ -n "$NR" ] && ok "复盘已登记（待街道关闭） $NR" || bad "复盘登记: $R"
+echo "$R" | grep -q '"status":"open"' && ok "复盘初始状态 open" || bad "复盘状态: $R"
+echo "$R" | python3 -c 'import sys,json;r=json.load(sys.stdin);assert r["finalSubsidyCents"]=="30000",r["finalSubsidyCents"];assert r["finalMerchantCostCents"]=="11300",r["finalMerchantCostCents"];assert r["proposedLatestShowTime"]=="20:15",r["proposedLatestShowTime"]' \
+  && ok "提前结束费用重算：补贴800→300元、商户协办费300→113元（45/120=37.5%），建议最晚放映20:15" \
+  || bad "重算金额: $(echo "$R" | python3 -c 'import sys,json;r=json.load(sys.stdin);print(r["finalSubsidyCents"],r["finalMerchantCostCents"],r["proposedLatestShowTime"])')"
+S=$(req GET "$TOK_warehouse" "/screenings/$SID")
+echo "$S" | python3 -c 'import sys,json;s=json.load(sys.stdin);assert s["subsidyAmount"]=="30000" and s["merchantCostCents"]=="11300" and s["endedEarlyAt"], "bad"' \
+  && ok "场次回写：核定补贴/商户协办费/提前结束时间" || bad "场次回写"
+
+echo "== 8c. 街道关闭投诉：三项未确认时拦截，全部确认后关闭并对点位下限制 =="
+R=$(req POST "$TOK_street" "/noise-reviews/$NR/close" -d '{"residentConfirmed":false,"volumeConfirmed":false}')
+echo "$R" | grep -q '居民沟通' && ok "未确认居民沟通→拒绝关闭" || bad "关闭校验缺失: $R"
+R=$(req POST "$TOK_street" "/noise-reviews/$NR/close" -d '{"residentConfirmed":true,"volumeConfirmed":true,"earlyEndConfirmed":false}')
+echo "$R" | grep -q '提前结束时间' && ok "未确认提前结束时间→拒绝关闭" || bad "提前结束校验缺失: $R"
+R=$(req POST "$TOK_street" "/noise-reviews/$NR/close" -d '{"residentConfirmed":true,"volumeConfirmed":true,"earlyEndConfirmed":true,"streetNote":"回访居民已接受，20:15收场情况属实"}')
+echo "$R" | grep -q '"status":"closed"' && ok "三项确认→投诉关闭" || bad "关闭: $R"
+V=$(req GET "$TOK_street" /venues)
+echo "$V" | python3 -c "import sys,json;v=next(x for x in json.load(sys.stdin) if x['id']=='$VENUE_ID');assert v['noiseRestricted'] and v['latestShowTime']=='20:15' and v['noiseTestRequired'], v" \
+  && ok "点位限制生效：最晚放映20:15 + 下次须提前降噪测试" || bad "点位限制未落库"
+NOISE_NOW=$(echo "$V" | python3 -c "import sys,json;print(next(v['noiseCount'] for v in json.load(sys.stdin) if v['id']=='$VENUE_ID'))")
+[ "$NOISE_NOW" = "$NOISE_AFTER" ] && ok "复盘关联工单不重复计噪声（仍为 $NOISE_NOW）" || bad "噪声重复计数 $NOISE_NOW vs $NOISE_AFTER"
+
+echo "== 8d. 下一次同场地申请自动带出限制：未降噪测试审批被拦→测试达标→最晚时间拦截 =="
+BODY2="{\"title\":\"限制点位复验专场\",\"organizerId\":\"$ORG_ID\",\"venueId\":\"$VENUE_ID\",\"showDate\":\"2026-10-09\",\"showTime\":\"19:30\",\"location\":\"广场北侧\",\"expectedAudience\":200,\"filmName\":\"我和我的祖国\",\"copyrightProof\":\"ZS-E2E-0002\",\"copyrightOwner\":\"中影\",\"powerCondition\":\"市政配电箱220V\",\"screenSize\":\"6m x 3.4m\",\"speakerCount\":2,\"securityStaff\":4,\"rainPlan\":\"防雨罩+转多功能厅\"}"
+SID2=$(req POST "$TOK_applicant" /screenings -d "$BODY2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+req POST "$TOK_applicant" "/screenings/$SID2/submit" -d '{}' >/dev/null
+D2=$(req GET "$TOK_applicant" "/screenings/$SID2")
+echo "$D2" | python3 -c 'import sys,json;s=json.load(sys.stdin);assert s["inheritedLatestShowTime"]=="20:15" and s["noiseTestRequired"] and not s["noiseTestDone"], s' \
+  && ok "新申请自动带出限制：最晚20:15 + 须降噪测试" || bad "限制带出失败"
+R=$(req POST "$TOK_reviewer" "/screenings/$SID2/review" -d '{"approved":true}')
+echo "$R" | grep -q '降噪测试' && ok "未做降噪测试→审批拦截" || bad "降噪测试前置校验: $R"
+req POST "$TOK_site" "/screenings/$SID2/noise-test" -d '{"noiseDb":64,"note":"首次测试仍偏高"}' >/dev/null
+R=$(req POST "$TOK_reviewer" "/screenings/$SID2/review" -d '{"approved":true}')
+echo "$R" | grep -q '60dB' && ok "降噪测试64dB超标→审批拦截" || bad "超标审批校验: $R"
+req POST "$TOK_site" "/screenings/$SID2/noise-test" -d '{"noiseDb":55,"note":"音箱角度内收后边界复测"}' >/dev/null
+R=$(req POST "$TOK_reviewer" "/screenings/$SID2/review" -d '{"approved":true,"filingNo":"BA-E2E-002"}')
+echo "$R" | grep -q 'review_approved' && ok "降噪测试达标(55dB)+19:30≤20:15→审批通过" || bad "限制点位审批: $R"
+BODY3="{\"title\":\"超时放映拦截专场\",\"organizerId\":\"$ORG_ID\",\"venueId\":\"$VENUE_ID\",\"showDate\":\"2026-10-10\",\"showTime\":\"20:30\",\"location\":\"广场北侧\",\"expectedAudience\":200,\"filmName\":\"我和我的祖国\",\"copyrightProof\":\"ZS-E2E-0003\",\"copyrightOwner\":\"中影\",\"powerCondition\":\"市电\",\"screenSize\":\"6m x 3.4m\",\"speakerCount\":2,\"securityStaff\":4,\"rainPlan\":\"转多功能厅\"}"
+SID3=$(req POST "$TOK_applicant" /screenings -d "$BODY3" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+req POST "$TOK_applicant" "/screenings/$SID3/submit" -d '{}' >/dev/null
+req POST "$TOK_site" "/screenings/$SID3/noise-test" -d '{"noiseDb":54}' >/dev/null
+R=$(req POST "$TOK_reviewer" "/screenings/$SID3/review" -d '{"approved":true}')
+echo "$R" | grep -q '最晚放映' && ok "20:30晚于限制20:15→审批拦截" || bad "最晚放映时间校验: $R"
 
 echo "== 9. 归还：5件完好 + 1件损坏赔付 300 元 =="
 i=0

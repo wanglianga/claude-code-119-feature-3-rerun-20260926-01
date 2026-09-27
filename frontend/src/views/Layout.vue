@@ -8,6 +8,7 @@
         <router-link v-if="roles.includes('warehouse')" to="/equipment">📦 设备库存/成套</router-link>
         <router-link v-if="roles.includes('security') || roles.includes('site_manager')" to="/incidents">🚨 异常协同</router-link>
         <router-link v-if="roles.includes('street') || roles.includes('reviewer')" to="/incidents">🚨 异常工单</router-link>
+        <router-link v-if="roles.includes('street')" to="/noise-reviews">🔇 噪声投诉复盘</router-link>
         <router-link v-if="roles.includes('street')" to="/venues">📍 场地与黑名单</router-link>
         <router-link v-if="roles.includes('street') || roles.includes('finance')" to="/organizers">⭐ 主办方信用/押金</router-link>
         <router-link v-if="roles.includes('street')" to="/dashboard">📊 街道看板</router-link>

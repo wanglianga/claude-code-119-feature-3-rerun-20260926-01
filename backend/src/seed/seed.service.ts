@@ -7,6 +7,7 @@ import { Venue } from '../entities/venue.entity';
 import { Organizer } from '../entities/organizer.entity';
 import { Screening } from '../entities/screening.entity';
 import { Equipment } from '../entities/equipment.entity';
+import { NoiseReview } from '../entities/noise-review.entity';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -18,6 +19,7 @@ export class SeedService implements OnModuleInit {
     @InjectRepository(Organizer) private readonly organizerRepo: Repository<Organizer>,
     @InjectRepository(Screening) private readonly screeningRepo: Repository<Screening>,
     @InjectRepository(Equipment) private readonly equipmentRepo: Repository<Equipment>,
+    @InjectRepository(NoiseReview) private readonly noiseReviewRepo: Repository<NoiseReview>,
   ) {}
 
   async onModuleInit() {
@@ -62,7 +64,7 @@ export class SeedService implements OnModuleInit {
       username: 'warehouse', name: '老赵（仓库）', role: 'warehouse',
       organization: '街道文体设备仓',
     });
-    await mkUser({
+    const site = await mkUser({
       username: 'site', name: '周强（现场负责人）', role: 'site_manager',
       organization: '幸福里社区',
     });
@@ -74,7 +76,7 @@ export class SeedService implements OnModuleInit {
       username: 'finance', name: '吴会计（财务）', role: 'finance',
       organization: '街道财务室',
     });
-    await mkUser({
+    const street = await mkUser({
       username: 'street', name: '郑岗（街道文体岗）', role: 'street',
       organization: '阳光街道办事处文体岗',
     });
@@ -106,6 +108,12 @@ export class SeedService implements OnModuleInit {
       name: '星光时代广场外摆区', address: '星光大道200号', district: '阳光街道',
       venueType: '商圈外摆', capacity: 500,
       noiseCount: 2, damageCount: 1, complaintCount: 3,
+      // 上一场噪声投诉复盘关闭后带出的点位限制：最晚 20:30 开映，下次申请前须提前降噪测试
+      noiseRestricted: true,
+      latestShowTime: '20:30',
+      noiseTestRequired: true,
+      noiseRestrictionNote: '来源于场次 OC-20260912-1860 噪声投诉复盘（投诉楼栋：星光公寓A座/B座，实测 68dB，21:05 提前结束）；最晚放映开始时间限定 20:30；下一次申请前须提前完成降噪测试',
+      restrictedAt: new Date(Date.now() - 6 * 86400000),
     }));
     await this.venueRepo.save(this.venueRepo.create({
       name: '江景苑小区中庭（暂停）', address: '江景路12号', district: '阳光街道',
@@ -166,9 +174,59 @@ export class SeedService implements OnModuleInit {
       status: 'review_approved',
       copyrightConfirmed: true, publicEventFiled: true, filingNo: 'BA-20260920-22',
       reviewerName: '李文（文化审核）', reviewedAt: new Date(),
-      reviewComment: '影片授权与备案材料齐全，同意放映',
+      reviewComment: '影片授权与备案材料齐全；已按噪声限制完成提前降噪测试 56dB，20:00 开映不晚于 20:30 限制，同意放映',
+      // 自动带出上一次复盘限制，且已提前完成降噪测试达标
+      inheritedLatestShowTime: '20:30',
+      noiseTestRequired: true, noiseTestDone: true, noiseTestDb: 56,
+      noiseTestAt: new Date(Date.now() - 86400000),
+      noiseTestNote: '外摆区B区边界实测 56dB，音箱角度内收并加装声屏障后达标',
     }));
 
-    this.logger.log('seed completed: 8 users / 3 organizers / 3 venues / 12 equipment / 2 screenings');
+    // 历史场次：星光时代广场上一场因噪声投诉提前结束，复盘已由街道关闭并对点位下限制
+    const past = new Date(Date.now() - 9 * 86400000).toISOString().slice(0, 10);
+    const hist = await this.screeningRepo.save(this.screeningRepo.create({
+      code: 'OC-20260912-1860',
+      title: '星光商圈周末露天放映《悬崖之上》',
+      applicantId: applicant.id, organizerId: org2.id, venueId: v2.id,
+      showDate: past, showTime: '19:40', location: '星光时代广场外摆区B区',
+      expectedAudience: 430,
+      filmName: '悬崖之上', copyrightProof: '中影数字院线放映许可 XK-2026-0988',
+      copyrightOwner: '中影数字电影发展（北京）有限公司',
+      powerCondition: '商户外接电源 220V/32A，电缆25米',
+      screenSize: '8m x 4.5m', speakerCount: 4, securityStaff: 6,
+      rainPlan: '降雨时设备加盖防雨罩并撤入商场一层卸货区',
+      siteManagerName: '周强', securityLeadName: '孙队',
+      status: 'completed',
+      copyrightConfirmed: true, publicEventFiled: true, filingNo: 'BA-20260912-07',
+      reviewerName: '李文（文化审核）', reviewedAt: new Date(Date.now() - 12 * 86400000),
+      copyrightWrittenOff: true, returnedAt: new Date(Date.now() - 9 * 86400000 + 2 * 3600000),
+      planSubsidyCents: '80000', planMerchantCostCents: '30000',
+      subsidyAmount: '64000', merchantCostCents: '24000',
+      endedEarlyAt: new Date(`${past}T21:05:00`),
+      endedEarlyReason: '噪声投诉致提前结束（投诉楼栋：星光公寓A座、B座）',
+      finalRemark: '噪声扰民提前收场，点位限制 20:30 前开映并要求下次提前降噪测试',
+    }));
+    await this.noiseReviewRepo.save(this.noiseReviewRepo.create({
+      screeningId: hist.id,
+      complaintBuildings: '星光公寓A座、B座',
+      noiseDb: 68,
+      volumeLoweredAt: new Date(`${past}T20:40:00`),
+      noiseDbAfter: 58,
+      securityResult: '安保上门向A座1202、B座0803住户解释，调低主音箱功率2档并将音箱外摆角度内收15度，居民仍要求提前结束',
+      recordedById: site.id,
+      endedEarly: true,
+      earlyEndAt: new Date(`${past}T21:05:00`),
+      proposedLatestShowTime: '20:30',
+      finalSubsidyCents: '64000',
+      finalMerchantCostCents: '24000',
+      recalcNote: '按实际放映时长折算（计划 120 分钟，折算比例 80%，保底 25%）：补贴 800.00→640.00 元；商户协办费 300.00→240.00 元；建议该点位后续最晚放映开始时间 20:30',
+      residentConfirmed: true, volumeConfirmed: true, earlyEndConfirmed: true,
+      status: 'closed',
+      closedById: street.id,
+      closedAt: new Date(Date.now() - 6 * 86400000),
+      streetNote: '已回访投诉住户，音量整改到位；该点位后续 20:30 前开映，下一轮申请先做降噪测试',
+    }));
+
+    this.logger.log('seed completed: 8 users / 3 organizers / 3 venues(1黑名单1噪声限制) / 12 equipment / 3 screenings / 1 noise review');
   }
 }
