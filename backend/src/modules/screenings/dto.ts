@@ -51,4 +51,8 @@ export class CreateScreeningDto {
 
   @IsOptional() @IsString()
   securityLeadName?: string;
+
+  /** 受限场地要求的提前降噪测试凭证/说明 */
+  @IsOptional() @IsString()
+  noiseTestProof?: string;
 }

@@ -14,6 +14,11 @@
     <div v-if="s.venue?.blacklisted" class="notice danger">
       ⛔ 该场地已列入黑名单：{{ s.venue.blacklistReason }}
     </div>
+    <div v-else-if="s.noiseTestRequired || s.latestShowTimeLimit" class="notice danger">
+      ⚠ 本场地为噪声受限点位（上次投诉复盘限制已自动带出）：
+      <template v-if="s.latestShowTimeLimit">最晚放映 <b>{{ s.latestShowTimeLimit }}</b>；</template>
+      <template v-if="s.noiseTestRequired">申请前须完成<b>提前降噪测试</b>（{{ s.noiseTestProof || '未登记凭证' }}）。</template>
+    </div>
     <div v-else-if="s.venueRiskLevel !== '正常'" class="notice">
       ⚠ 点位风险等级：<b>{{ s.venueRiskLevel }}</b>
       （历史噪声 {{ s.venue.noiseCount }} 次 / 设备损坏 {{ s.venue.damageCount }} 次 / 投诉 {{ s.venue.complaintCount }} 次，
@@ -252,6 +257,107 @@
       </div>
     </div>
 
+    <!-- 噪声投诉复盘 -->
+    <div v-show="tab === 'noise'">
+      <div class="card">
+        <h3>居民噪声投诉登记（现场负责人 / 安保）</h3>
+        <div class="notice">
+          放映中居民投诉扰民时，现场负责人记录投诉楼栋、分贝读数、调低音量时间和安保沟通结果。
+        </div>
+        <div v-if="isAny('site_manager','security','street')" class="grid2">
+          <div class="form-row"><label class="req">投诉楼栋</label>
+            <input v-model="nc.building" placeholder="如 3栋2单元 / 幸福里3号楼" />
+          </div>
+          <div class="form-row"><label class="req">分贝读数</label>
+            <input v-model.number="nc.noiseDb" type="number" placeholder="如 67" />
+          </div>
+          <div class="form-row"><label class="req">调低音量时间</label>
+            <input v-model="nc.volumeLoweredAt" type="datetime-local" />
+          </div>
+          <div class="form-row"><label>调低后分贝</label>
+            <input v-model.number="nc.noiseDbAfter" type="number" placeholder="如 55（选填）" />
+          </div>
+        </div>
+        <div v-if="isAny('site_manager','security','street')">
+          <div class="form-row" style="grid-template-columns:110px 1fr"><label class="req">安保沟通结果</label>
+            <textarea v-model="nc.securityCommunication" placeholder="到场沟通经过、居民诉求、是否接受" />
+          </div>
+          <div class="form-row" style="grid-template-columns:110px 1fr"><label>现场处置</label>
+            <textarea v-model="nc.actionTaken" placeholder="调小低音/调整音箱角度/加派疏导等（选填）" />
+          </div>
+          <div class="row" style="padding-left:120px">
+            <button class="primary" @click="createComplaint">登记噪声投诉</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-for="c in s.noiseComplaints" :key="c.id" class="card">
+        <div class="row" style="justify-content:space-between">
+          <div>
+            <span class="tag" :class="c.closedAt ? 'green' : 'red'">{{ c.closedAt ? '已关闭' : '待街道关闭' }}</span>
+            <b style="margin-left:8px">{{ c.building }} · {{ c.noiseDb }}dB</b>
+            <span v-if="c.endedEarly" class="pill">已提前结束</span>
+            <span v-if="c.venueRestrictionApplied" class="pill">限制已写入场地</span>
+          </div>
+          <span class="muted">登记：{{ c.createdBy?.name }} · {{ fmt(c.createdAt) }}</span>
+        </div>
+
+        <div class="grid3" style="margin:10px 0">
+          <Info label="投诉楼栋" :value="c.building" />
+          <Info label="分贝读数" :value="`${c.noiseDb} dB`" />
+          <Info label="调低后分贝" :value="c.noiseDbAfter != null ? `${c.noiseDbAfter} dB` : '—'" />
+          <Info label="调低音量时间" :value="fmt(c.volumeLoweredAt)" />
+          <Info label="提前结束时间" :value="c.endedEarly ? fmt(c.earlyEndedAt) : '未提前结束'" />
+          <Info label="建议最晚放映" :value="c.derivedLatestShowTime || '—'" />
+        </div>
+        <div><span class="muted">安保沟通结果：</span>{{ c.securityCommunication }}</div>
+        <div v-if="c.actionTaken" style="margin-top:6px"><span class="muted">现场处置：</span>{{ c.actionTaken }}</div>
+
+        <!-- 提前结束与费用重算 -->
+        <div v-if="c.endedEarly" class="notice" style="margin-top:10px">
+          <b>活动提前结束，平台已按实际放映比例重算：</b>
+          实际放映 {{ c.actualMinutes }}/{{ c.plannedMinutes }} 分钟；
+          街道补贴 ¥{{ fen(c.originalSubsidyCents) }} → <b>¥{{ fen(c.recalcSubsidyCents) }}</b>；
+          商户协办费 ¥{{ fen(c.originalMerchantFeeCents) }} → <b>¥{{ fen(c.merchantFeeCents) }}</b>。
+          <div class="muted" style="margin-top:4px">{{ c.recalcNote }}</div>
+        </div>
+        <div v-else-if="!c.closedAt && isAny('site_manager','security','street')" class="row" style="margin-top:10px">
+          <label style="font-size:13px">若活动提前结束，登记实际结束时间并重算费用：</label>
+          <input v-model="earlyDraft[c.id]" type="datetime-local" />
+          <button class="danger" @click="endEarly(c)">确认提前结束并重算</button>
+        </div>
+
+        <!-- 街道三项确认 -->
+        <div class="card inner" v-if="!c.closedAt" style="margin-top:12px">
+          <h3 style="font-size:15px">街道复盘确认（关闭前必须三项全部确认）</h3>
+          <div v-if="is('street')" class="row" style="flex-wrap:wrap;gap:18px">
+            <label><input type="checkbox" style="width:auto" v-model="reviewDraft[c.id].resident" /> 确认居民沟通</label>
+            <label><input type="checkbox" style="width:auto" v-model="reviewDraft[c.id].volume" /> 确认音量调整</label>
+            <label><input type="checkbox" style="width:auto" v-model="reviewDraft[c.id].earlyEnd" /> 确认提前结束时间</label>
+            <button @click="reviewComplaint(c)">保存确认</button>
+          </div>
+          <div v-else class="muted">等待街道文体岗逐项确认居民沟通、音量调整、提前结束时间。</div>
+          <div class="row" style="margin-top:8px;gap:8px">
+            <span class="tag" :class="c.confirmResidentContact ? 'green' : 'gray'">居民沟通 {{ c.confirmResidentContact ? '✓' : '待确认' }}</span>
+            <span class="tag" :class="c.confirmVolumeAdjustment ? 'green' : 'gray'">音量调整 {{ c.confirmVolumeAdjustment ? '✓' : '待确认' }}</span>
+            <span class="tag" :class="c.confirmEarlyEndTime ? 'green' : 'gray'">提前结束时间 {{ c.confirmEarlyEndTime ? '✓' : '待确认' }}</span>
+          </div>
+          <div v-if="is('street')" class="row" style="margin-top:10px">
+            <input v-model="closeDraft[c.id].latest" placeholder="最晚放映时间 HH:mm，留空取系统推导" style="width:220px" />
+            <input v-model="closeDraft[c.id].comment" placeholder="街道复盘意见（选填）" style="flex:1;min-width:200px" />
+            <button class="success" @click="closeComplaint(c)">三项齐备·关闭投诉并写入场地限制</button>
+          </div>
+        </div>
+
+        <div v-else class="notice success" style="margin-top:10px">
+          街道已关闭复盘（{{ fmt(c.closedAt) }}）：该点位后续最晚放映 <b>{{ c.derivedLatestShowTime }}</b>，
+          下一次同场地申请自动带出本次限制，并要求<b>提前完成降噪测试</b>。
+          <span v-if="c.reviewComment">复盘意见：{{ c.reviewComment }}</span>
+        </div>
+      </div>
+      <div v-if="!s.noiseComplaints?.length" class="card"><div class="muted">本场暂无噪声投诉复盘记录</div></div>
+    </div>
+
     <!-- 核销 -->
     <div v-show="tab === 'settlement'">
       <div class="card">
@@ -259,7 +365,8 @@
         <div class="grid4">
           <div class="kpi"><div class="num">¥{{ fen(s.damageCompensation) }}</div><div class="label">设备损坏赔付</div></div>
           <div class="kpi"><div class="num">¥{{ fen(s.depositDeducted) }}</div><div class="label">押金扣减</div></div>
-          <div class="kpi"><div class="num">¥{{ fen(s.subsidyAmount) }}</div><div class="label">补贴发放</div></div>
+          <div class="kpi"><div class="num">¥{{ fen(s.subsidyAmount) }}</div><div class="label">{{ s.subsidyRecalculated ? '补贴(投诉重算)' : '补贴发放' }}</div></div>
+          <div class="kpi"><div class="num">¥{{ fen(s.merchantFeeCents) }}</div><div class="label">商户协办费用</div></div>
           <div class="kpi"><div class="num">{{ s.copyrightWrittenOff ? '已核销' : '未核销' }}</div><div class="label">版权核销</div></div>
         </div>
         <div v-if="isAny('reviewer','finance','street')" class="row" style="margin-top:14px">
@@ -335,6 +442,7 @@ const tabs = computed(() => [
   { key: 'equipment', label: `设备出库/归还${s.value?.equipmentAssignments?.length ? `（${s.value.equipmentAssignments.length}）` : ''}` },
   { key: 'site', label: '现场巡检/志愿者' },
   { key: 'incidents', label: `异常协同${s.value?.incidents?.length ? `（${s.value.incidents.filter((i:any)=>i.status!=='resolved').length}）` : ''}` },
+  { key: 'noise', label: `噪声投诉复盘${s.value?.noiseComplaints?.length ? `（${s.value.noiseComplaints.length}）` : ''}` },
   { key: 'settlement', label: '归还核销/补贴' },
   { key: 'timeline', label: '街道时间线' },
 ]);
@@ -349,6 +457,20 @@ const newInc = reactive({ type: 'noise_complaint', description: '', noiseDb: 65 
 const settle = reactive({ type: 'deposit_refund', yuan: 2000, note: '' });
 const finalRemark = ref('');
 const returnDraft = reactive<Record<string, any>>({});
+
+const nowLocalInput = () => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+const nc = reactive({
+  building: '', noiseDb: 65, volumeLoweredAt: nowLocalInput(),
+  noiseDbAfter: undefined as number | undefined,
+  securityCommunication: '', actionTaken: '',
+});
+const earlyDraft = reactive<Record<string, string>>({});
+const reviewDraft = reactive<Record<string, { resident: boolean; volume: boolean; earlyEnd: boolean }>>({});
+const closeDraft = reactive<Record<string, { latest: string; comment: string }>>({});
 
 const fen = fenToYuan;
 function fmt(d?: string) { return d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—'; }
@@ -378,6 +500,19 @@ async function load() {
     if (!returnDraft[a.equipmentId]) {
       returnDraft[a.equipmentId] = { result: 'returned_ok', compensationYuan: 0, note: '' };
     }
+  }
+  for (const c of data.noiseComplaints || []) {
+    if (!reviewDraft[c.id]) {
+      reviewDraft[c.id] = {
+        resident: !!c.confirmResidentContact,
+        volume: !!c.confirmVolumeAdjustment,
+        earlyEnd: !!c.confirmEarlyEndTime,
+      };
+    }
+    if (!closeDraft[c.id]) {
+      closeDraft[c.id] = { latest: c.derivedLatestShowTime || '', comment: '' };
+    }
+    if (earlyDraft[c.id] === undefined) earlyDraft[c.id] = nowLocalInput();
   }
 }
 
@@ -453,6 +588,42 @@ async function createIncident() {
   newInc.description = '';
   await load();
 }
+async function createComplaint() {
+  await api.post(`/screenings/${s.value.id}/noise-complaints`, {
+    building: nc.building,
+    noiseDb: nc.noiseDb,
+    volumeLoweredAt: nc.volumeLoweredAt,
+    noiseDbAfter: nc.noiseDbAfter ?? undefined,
+    securityCommunication: nc.securityCommunication,
+    actionTaken: nc.actionTaken || undefined,
+  });
+  nc.building = ''; nc.securityCommunication = ''; nc.actionTaken = ''; nc.noiseDbAfter = undefined;
+  await load();
+}
+async function endEarly(c: any) {
+  const t = earlyDraft[c.id];
+  if (!t) return;
+  await api.post(`/noise-complaints/${c.id}/end-early`, { earlyEndedAt: t });
+  await load();
+}
+async function reviewComplaint(c: any) {
+  const d = reviewDraft[c.id];
+  await api.post(`/noise-complaints/${c.id}/review`, {
+    confirmResidentContact: d.resident,
+    confirmVolumeAdjustment: d.volume,
+    confirmEarlyEndTime: d.earlyEnd,
+  });
+  await load();
+}
+async function closeComplaint(c: any) {
+  const d = closeDraft[c.id];
+  await api.post(`/noise-complaints/${c.id}/close`, {
+    latestShowTime: d.latest || undefined,
+    reviewComment: d.comment || undefined,
+  });
+  d.comment = '';
+  await load();
+}
 async function writeoff() {
   await api.post(`/screenings/${s.value.id}/settlements/copyright-writeoff`, {});
   await load();
@@ -471,3 +642,8 @@ async function complete() {
 
 onMounted(load);
 </script>
+
+<style scoped>
+.card.inner { background: #f7f9fc; border: 1px dashed var(--border); box-shadow: none; padding: 14px 16px; }
+.tag.gray { background: #e0e0e0; color: #666; }
+</style>

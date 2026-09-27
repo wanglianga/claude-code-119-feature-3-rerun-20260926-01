@@ -8,7 +8,7 @@
       <table class="list">
         <thead>
           <tr><th>场地</th><th>类型</th><th>地址</th><th>容量</th>
-            <th>噪声次数</th><th>设备损坏</th><th>投诉</th><th>风险分</th><th>最近活动</th><th>状态</th><th>操作</th></tr>
+            <th>噪声次数</th><th>设备损坏</th><th>投诉</th><th>风险分</th><th>最晚放映/降噪</th><th>最近活动</th><th>状态</th><th>操作</th></tr>
         </thead>
         <tbody>
           <tr v-for="v in list" :key="v.id">
@@ -19,6 +19,14 @@
             <td :class="{ hot: v.complaintCount >= 2 }">{{ v.complaintCount }}</td>
             <td>
               <span class="tag" :class="risk(v).cls">{{ risk(v).score }} · {{ risk(v).label }}</span>
+            </td>
+            <td>
+              <div v-if="v.latestShowTime || v.noiseTestRequired">
+                <div v-if="v.latestShowTime" class="tag orange" style="margin-bottom:2px">≤ {{ v.latestShowTime }}</div>
+                <div v-if="v.noiseTestRequired" class="tag red" style="margin-bottom:2px">需提前降噪测试</div>
+                <div class="muted" style="max-width:200px;font-size:12px">{{ v.restrictionReason }}</div>
+              </div>
+              <span v-else class="muted">—</span>
             </td>
             <td class="muted">{{ v.lastScreeningAt ? fmt(v.lastScreeningAt) : '—' }}</td>
             <td>

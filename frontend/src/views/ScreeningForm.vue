@@ -19,17 +19,39 @@
           </select>
         </div>
         <div class="form-row"><label class="req">放映场地</label>
-          <select v-model="form.venueId">
+          <select v-model="form.venueId" @change="onVenue">
             <option value="">请选择</option>
             <option v-for="v in venues" :key="v.id" :value="v.id" :disabled="v.blacklisted">
-              {{ v.name }}{{ v.blacklisted ? '（黑名单·禁选）' : '' }}
+              {{ v.name }}{{ v.blacklisted ? '（黑名单·禁选）' : v.noiseTestRequired ? '（噪声限制·需降噪测试）' : '' }}
             </option>
           </select>
         </div>
         <div class="form-row"><label class="req">具体位置</label><input v-model="form.location" placeholder="广场北侧/外摆B区" /></div>
         <div class="form-row"><label class="req">放映日期</label><input v-model="form.showDate" type="date" /></div>
-        <div class="form-row"><label class="req">放映时间</label><input v-model="form.showTime" type="time" /></div>
+        <div class="form-row">
+          <label class="req">放映时间</label>
+          <input v-model="form.showTime" type="time" />
+          <span v-if="selectedVenue?.latestShowTime" class="muted" style="margin-left:8px">
+            该场地最晚放映 {{ selectedVenue.latestShowTime }}
+          </span>
+        </div>
         <div class="form-row"><label class="req">预计观众</label><input v-model.number="form.expectedAudience" type="number" min="1" /></div>
+      </div>
+
+      <div v-if="selectedVenue && (selectedVenue.noiseTestRequired || selectedVenue.latestShowTime)" class="notice danger" style="margin:0 16px 16px">
+        ⚠ 场地「{{ selectedVenue.name }}」因上一次噪声投诉复盘被限制：
+        <ul style="margin:6px 0 0 18px;padding:0">
+          <li v-if="selectedVenue.latestShowTime">本次放映开始时间不得晚于 <b>{{ selectedVenue.latestShowTime }}</b>（自动带出的审批限制）。</li>
+          <li v-if="selectedVenue.noiseTestRequired">申请前需完成<b>提前降噪测试</b>，请在下方填写测试时间、分贝结果与整改措施，否则申请会被拦截。</li>
+        </ul>
+        <div class="muted" style="margin-top:6px">{{ selectedVenue.restrictionReason }}</div>
+      </div>
+      <div v-if="selectedVenue?.noiseTestRequired" class="card" style="margin:0 16px 16px">
+        <h3>提前降噪测试（受限场地必填）</h3>
+        <div class="form-row" style="grid-template-columns:110px 1fr">
+          <label class="req">降噪测试结果</label>
+          <textarea v-model="form.noiseTestProof" placeholder="测试日期、测点（楼栋/距离）、整改前后分贝、采用的降噪措施（音箱角度/限功率/声屏障等）" />
+        </div>
       </div>
     </div>
 
@@ -73,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '../api';
 
@@ -89,7 +111,14 @@ const form = ref({
   filmName: '', copyrightOwner: '', copyrightProof: '',
   powerCondition: '', screenSize: '6m x 3.4m', speakerCount: 2, securityStaff: 4,
   rainPlan: '', siteManagerName: '周强', securityLeadName: '孙队',
+  noiseTestProof: '',
 });
+
+const selectedVenue = computed(() => venues.value.find((v) => v.id === form.value.venueId));
+function onVenue() {
+  // 切换场地后，若受限场地给出更晚默认时间则不动；测试凭证需重新填写
+  form.value.noiseTestProof = '';
+}
 
 onMounted(async () => {
   const [v, o] = await Promise.all([api.get('/venues'), api.get('/organizers')]);

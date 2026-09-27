@@ -58,7 +58,7 @@ export class ScreeningsService {
         'applicant', 'venue', 'organizer',
         'equipmentAssignments', 'equipmentAssignments.equipment',
         'inspections', 'incidents', 'timeline',
-        'volunteerCheckins', 'settlements',
+        'volunteerCheckins', 'settlements', 'noiseComplaints',
       ],
     });
     if (!s) throw new NotFoundException('场次不存在');
@@ -78,6 +78,18 @@ export class ScreeningsService {
     const organizer = await this.organizerRepo.findOne({ where: { id: dto.organizerId } });
     if (!organizer) throw new BadRequestException('主办方不存在');
 
+    // 下一次同场地申请自动带出噪声投诉复盘写入的限制条件
+    if (venue.latestShowTime && dto.showTime > venue.latestShowTime) {
+      throw new BadRequestException(
+        `场地「${venue.name}」被限制：后续最晚放映时间为 ${venue.latestShowTime}，本次申请 ${dto.showTime} 超出限制`,
+      );
+    }
+    if (venue.noiseTestRequired && !(dto.noiseTestProof || '').trim()) {
+      throw new BadRequestException(
+        `场地「${venue.name}」因噪声投诉被限制，下一次申请前需完成提前降噪测试并填写测试凭证/结果`,
+      );
+    }
+
     const seq = Math.floor(1000 + Math.random() * 9000);
     const code = `OC-${dto.showDate.replace(/-/g, '')}-${seq}`;
     const screening = this.repo.create({
@@ -85,10 +97,16 @@ export class ScreeningsService {
       code,
       applicantId: user.sub,
       status: 'draft',
+      latestShowTimeLimit: venue.latestShowTime || null,
+      noiseTestRequired: venue.noiseTestRequired,
     });
     const saved = await this.repo.save(screening);
+    const limitNote = venue.latestShowTime || venue.noiseTestRequired
+      ? `；自动带出场地限制：最晚放映 ${venue.latestShowTime || '不限'}`
+        + `${venue.noiseTestRequired ? '，已核验提前降噪测试凭证' : ''}`
+      : '';
     await this.log(saved.id, 'apply', '提交放映申请',
-      `${dto.showDate} ${dto.showTime} @ ${venue.name}，影片《${dto.filmName}》，预计观众 ${dto.expectedAudience} 人`,
+      `${dto.showDate} ${dto.showTime} @ ${venue.name}，影片《${dto.filmName}》，预计观众 ${dto.expectedAudience} 人${limitNote}`,
       user, 'applicant');
     return saved;
   }
@@ -163,6 +181,10 @@ export class ScreeningsService {
     const s = await this.repo.findOne({ where: { id } });
     if (!s) throw new NotFoundException('场次不存在');
     if (s.status !== 'site_confirmed') throw new BadRequestException('现场搭建与安全五项确认完成后才能开始放映');
+    if (!s.startedAt) {
+      s.startedAt = new Date();
+      await this.repo.save(s);
+    }
     return this.setStatus(id, 'screening', user, 'screening', '放映开始', '现场负责人宣布放映开始');
   }
 

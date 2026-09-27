@@ -11,6 +11,7 @@ import { Incident } from './incident.entity';
 import { TimelineEvent } from './timeline-event.entity';
 import { VolunteerCheckin } from './volunteer-checkin.entity';
 import { Settlement } from './settlement.entity';
+import { NoiseComplaint } from './noise-complaint.entity';
 
 /**
  * 场次生命周期：
@@ -141,6 +142,44 @@ export class Screening {
   @Column({ type: 'timestamptz', nullable: true })
   returnedAt: Date;
 
+  // ---------- 实际放映（噪声投诉提前结束复盘用） ----------
+  /** 实际开始放映时间（点击「开始放映」记录） */
+  @Column({ name: 'started_at', type: 'timestamptz', nullable: true })
+  startedAt: Date;
+
+  /** 因噪声投诉提前结束的实际结束时间 */
+  @Column({ name: 'early_ended_at', type: 'timestamptz', nullable: true })
+  earlyEndedAt: Date;
+
+  /** 计划放映时长（分钟），用于费用重算，默认 120 分钟 */
+  @Column({ name: 'planned_minutes', type: 'int', default: 120 })
+  plannedMinutes: number;
+
+  /** 实际放映时长（分钟） */
+  @Column({ name: 'actual_minutes', type: 'int', nullable: true })
+  actualMinutes: number;
+
+  /** 商户协办费用（分），正常计划口径 */
+  @Column({ name: 'merchant_fee_cents', type: 'bigint', default: 0 })
+  merchantFeeCents: string;
+
+  /** 噪声投诉导致提前结束后，重算出的补贴（补贴以此为准发放） */
+  @Column({ name: 'subsidy_recalculated', type: 'boolean', default: false })
+  subsidyRecalculated: boolean;
+
+  // ---------- 下一次审批带出的场地限制快照 ----------
+  /** 申请时从场地带出的最晚放映时间限制，如 20:30 */
+  @Column({ name: 'latest_show_time_limit', type: 'varchar', length: 8, nullable: true })
+  latestShowTimeLimit: string;
+
+  /** 申请时场地是否要求提前降噪测试 */
+  @Column({ name: 'noise_test_required', type: 'boolean', default: false })
+  noiseTestRequired: boolean;
+
+  /** 申请方已完成提前降噪测试的凭证/说明 */
+  @Column({ name: 'noise_test_proof', type: 'text', nullable: true })
+  noiseTestProof: string;
+
   /** 设备损坏赔付（分） */
   @Column({ type: 'bigint', default: 0 })
   damageCompensation: string;
@@ -181,6 +220,9 @@ export class Screening {
 
   @OneToMany(() => Settlement, (s) => s.screening)
   settlements: Settlement[];
+
+  @OneToMany(() => NoiseComplaint, (c) => c.screening)
+  noiseComplaints: NoiseComplaint[];
 
   @CreateDateColumn()
   createdAt: Date;

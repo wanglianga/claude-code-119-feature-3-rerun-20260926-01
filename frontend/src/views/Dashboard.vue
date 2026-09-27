@@ -15,12 +15,17 @@
       <div class="card">
         <h3>点位风险榜（连续噪声/设备损坏影响下一轮审批）</h3>
         <table class="list">
-          <thead><tr><th>场地</th><th>噪声</th><th>损坏</th><th>投诉</th><th>风险分</th><th>状态</th></tr></thead>
+          <thead><tr><th>场地</th><th>噪声</th><th>损坏</th><th>投诉</th><th>风险分</th><th>复盘限制</th><th>状态</th></tr></thead>
           <tbody>
             <tr v-for="v in data.riskyVenues" :key="v.id">
               <td><b>{{ v.name }}</b></td>
               <td>{{ v.noiseCount }}</td><td>{{ v.damageCount }}</td><td>{{ v.complaintCount }}</td>
               <td><span class="tag" :class="v.riskScore >= 8 ? 'red' : v.riskScore >= 3 ? 'orange' : 'green'">{{ v.riskScore }}</span></td>
+              <td>
+                <span v-if="v.latestShowTime" class="tag orange" style="margin-right:4px">≤{{ v.latestShowTime }}</span>
+                <span v-if="v.noiseTestRequired" class="tag red">需降噪测试</span>
+                <span v-if="!v.latestShowTime && !v.noiseTestRequired" class="muted">—</span>
+              </td>
               <td><span v-if="v.blacklisted" class="tag red">黑名单</span><span v-else class="tag green">可安排</span></td>
             </tr>
           </tbody>

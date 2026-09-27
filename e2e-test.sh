@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 端到端业务流验证：申请→黑名单拦截→审批→成套备料→扫码（错误码拒绝+六件齐出库）
 # →五项现场上传→确认→开始放映→志愿者→噪声投诉多角色协同办结（风险/信用联动）
+# →噪声投诉复盘（登记→提前结束重算补贴/商户协办费/最晚放映→街道三项确认关闭→限制写场地）
+# →同场地再申请自动带出限制（降噪测试+最晚时间校验）
 # →归还定损→版权核销→财务流水→关单→街道看板
 set -u
 BASE="${BASE:-http://localhost:3119/api}"
@@ -105,6 +107,63 @@ CREDIT_AFTER=$(req GET "$TOK_street" /organizers | python3 -c "import sys,json;p
 [ "$NOISE_AFTER" = $((NOISE_BEFORE+1)) ] && ok "点位噪声计数 $NOISE_BEFORE→$NOISE_AFTER" || bad "噪声计数 $NOISE_BEFORE→$NOISE_AFTER"
 [ "$CREDIT_AFTER" = $((CREDIT_BEFORE-8)) ] && ok "主办方信用 $CREDIT_BEFORE→$CREDIT_AFTER (-8)" || bad "信用 $CREDIT_BEFORE→$CREDIT_AFTER"
 
+echo "== 8b. 噪声投诉复盘：登记→缺字段拦截→提前结束重算→街道三项确认→关闭写限制 =="
+# 缺投诉楼栋应被拦截
+R=$(req POST "$TOK_site" "/screenings/$SID/noise-complaints" -d '{"noiseDb":67,"volumeLoweredAt":"2026-10-05T19:40","securityCommunication":"已沟通"}')
+echo "$R" | grep -q '投诉楼栋' && ok "缺投诉楼栋登记被拦截" || bad "投诉楼栋校验: $R"
+
+S=$(req GET "$TOK_site" "/screenings/$SID")
+STARTED=$(echo "$S" | python3 -c 'import sys,json;print(json.load(sys.stdin)["startedAt"])')
+LOWERED=$(python3 -c "from datetime import datetime,timedelta;t=datetime.fromisoformat('''$STARTED'''.replace('Z','+00:00'))+timedelta(minutes=5);print(t.isoformat(timespec='minutes'))")
+BODY_NC="{\"building\":\"幸福里3号楼2单元\",\"noiseDb\":67,\"volumeLoweredAt\":\"$LOWERED\",\"noiseDbAfter\":55,\"securityCommunication\":\"安保孙队上门沟通，居民反映低音共振，要求21点前结束\",\"actionTaken\":\"调低低音、音箱偏转15度\"}"
+R=$(req POST "$TOK_site" "/screenings/$SID/noise-complaints" -d "$BODY_NC")
+NC=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+[ -n "$NC" ] && echo "$R" | grep -q '"noiseDb":67' && ok "投诉登记（楼栋/分贝/调低音量时间/安保沟通）" || bad "投诉登记: $R"
+CNT=$(req GET "$TOK_street" "/screenings/$SID/noise-complaints" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
+[ "$CNT" = "1" ] && ok "场次投诉复盘列表 1 条" || bad "投诉列表数=$CNT"
+
+# 活动提前结束（实际放映约40分钟），平台重算补贴/商户协办费/最晚放映时间
+ENDED=$(python3 -c "from datetime import datetime,timedelta;t=datetime.fromisoformat('''$STARTED'''.replace('Z','+00:00'))+timedelta(minutes=40);print(t.isoformat(timespec='minutes'))")
+R=$(req POST "$TOK_security" "/noise-complaints/$NC/end-early" -d "{\"earlyEndedAt\":\"$ENDED\"}")
+echo "$R" | python3 -c '
+import sys,json
+c=json.load(sys.stdin)
+am,pm=int(c["actualMinutes"]),int(c["plannedMinutes"])
+assert c["endedEarly"] and 0 < am < pm, (am,pm)
+assert int(c["recalcSubsidyCents"])==round(80000*am/pm), c["recalcSubsidyCents"]
+assert int(c["merchantFeeCents"])==round(50000*am/pm), c["merchantFeeCents"]
+assert int(c["recalcSubsidyCents"]) < 80000
+assert c["derivedLatestShowTime"]=="20:30", c["derivedLatestShowTime"]
+' && ok "提前结束按比例重算补贴/商户协办费，推导最晚放映20:30" || bad "费用重算: $R"
+# 重算补贴回写场次
+req GET "$TOK_finance" "/screenings/$SID" | python3 -c 'import sys,json;s=json.load(sys.stdin);assert s["subsidyRecalculated"] and int(s["subsidyAmount"])<80000 and s["earlyEndedAt"]' \
+  && ok "重算补贴/提前结束时间回写场次" || bad "重算回写失败"
+
+# 未完成三项确认时街道关闭被拒
+R=$(req POST "$TOK_street" "/noise-complaints/$NC/close" -d '{}')
+echo "$R" | grep -q '居民沟通' && ok "三项未确认时关闭被拦截" || bad "关闭前置校验: $R"
+# 街道逐项确认
+req POST "$TOK_street" "/noise-complaints/$NC/review" -d '{"confirmResidentContact":true,"confirmVolumeAdjustment":true,"confirmEarlyEndTime":true,"reviewComment":"三项均已电话/现场复核"}' >/dev/null
+R=$(req POST "$TOK_street" "/noise-complaints/$NC/close" -d '{"reviewComment":"限制该点位最晚20:30放映并要求降噪测试"}')
+echo "$R" | grep -q 'venueRestrictionApplied' && echo "$R" | grep -q '"closedAt"' && ok "街道三项确认齐备→投诉关闭" || bad "投诉关闭: $R"
+
+# 场地限制已回写
+req GET "$TOK_street" /venues | python3 -c "import sys,json;v=next(x for x in json.load(sys.stdin) if x['id']=='$VENUE_ID');assert v['latestShowTime']=='20:30' and v['noiseTestRequired'] and v['restrictionReason']" \
+  && ok "限制写入场地：最晚20:30 + 需提前降噪测试" || bad "场地限制回写失败"
+
+echo "== 8c. 下一次同场地申请自动带出限制 =="
+BODY_BASE="\"organizerId\":\"$ORG\",\"venueId\":\"$VENUE_OK\",\"showDate\":\"2026-11-05\",\"location\":\"广场北侧\",\"expectedAudience\":200,\"filmName\":\"测试片\",\"copyrightProof\":\"P-2\",\"copyrightOwner\":\"版权方\",\"powerCondition\":\"市电\",\"screenSize\":\"6x3.4\",\"speakerCount\":2,\"securityStaff\":4,\"rainPlan\":\"无\""
+# 未填降噪测试凭证 → 拦截
+R=$(req POST "$TOK_applicant" /screenings -d "{$BODY_BASE,\"title\":\"限制-缺测试\",\"showTime\":\"20:00\"}")
+echo "$R" | grep -q '降噪测试' && ok "受限场地缺降噪测试凭证被拦截" || bad "降噪测试拦截: $R"
+# 超出最晚放映时间 → 拦截
+R=$(req POST "$TOK_applicant" /screenings -d "{$BODY_BASE,\"title\":\"限制-超时\",\"showTime\":\"21:00\",\"noiseTestProof\":\"2026-10-20实测边界55dB达标\"}")
+echo "$R" | grep -q '最晚放映时间' && ok "21:00 超出 20:30 限制被拦截" || bad "最晚时间拦截: $R"
+# 合规申请（20:00 + 测试凭证）通过，并自动带出限制快照
+R=$(req POST "$TOK_applicant" /screenings -d "{$BODY_BASE,\"title\":\"限制-合规场\",\"showTime\":\"20:00\",\"noiseTestProof\":\"2026-10-20 3号楼测点整改前64dB/限功率+音箱偏转后55dB达标\"}")
+echo "$R" | python3 -c 'import sys,json;s=json.load(sys.stdin);assert s["latestShowTimeLimit"]=="20:30" and s["noiseTestRequired"] and s["noiseTestProof"]' \
+  && ok "合规申请通过，场次自动带出最晚20:30+降噪测试限制" || bad "限制带出: $R"
+
 echo "== 9. 归还：5件完好 + 1件损坏赔付 300 元 =="
 i=0
 for row in $(echo "$ASSIGN" | python3 -c 'import sys,json;[print("%s,%s"%(x["id"],x["equipmentId"])) for x in json.load(sys.stdin)]'); do
@@ -124,10 +183,11 @@ echo "== 10. 未版权核销时关单被拒 =="
 R=$(req POST "$TOK_finance" "/screenings/$SID/settlements/complete" -d '{}')
 echo "$R" | grep -q '版权尚未核销' && ok "关单前置校验生效" || bad "关单校验: $R"
 
-echo "== 11. 版权核销 + 财务流水（押金退还/补贴）+ 关单 =="
+echo "== 11. 版权核销 + 财务流水（押金退还/按复盘重算额发补贴）+ 关单 =="
 req POST "$TOK_reviewer" "/screenings/$SID/settlements/copyright-writeoff" -d '{}' >/dev/null
 req POST "$TOK_finance" "/screenings/$SID/settlements" -d '{"type":"deposit_refund","amountCents":200000,"note":"设备归还无损部分退还押金"}' >/dev/null
-req POST "$TOK_finance" "/screenings/$SID/settlements" -d '{"type":"subsidy","amountCents":80000,"note":"街道公益放映补贴"}' >/dev/null
+SUBSIDY_RECALC=$(req GET "$TOK_finance" "/screenings/$SID" | python3 -c 'import sys,json;print(json.load(sys.stdin)["subsidyAmount"])')
+req POST "$TOK_finance" "/screenings/$SID/settlements" -d "{\"type\":\"subsidy\",\"amountCents\":$SUBSIDY_RECALC,\"note\":\"按噪声投诉提前结束重算额发放补贴\"}" >/dev/null
 req POST "$TOK_finance" "/screenings/$SID/settlements" -d '{"type":"damage_compensation","amountCents":30000,"note":"音箱面罩赔偿"}' >/dev/null
 R=$(req POST "$TOK_finance" "/screenings/$SID/settlements/complete" -d '{"finalRemark":"组织有序，该点位可继续安排夜间活动"}')
 echo "$R" | grep -q '"status":"completed"' && ok "关单归档→completed" || bad "关单: $R"
